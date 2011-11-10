@@ -31,12 +31,12 @@ init(State = #acceptor_state{port = Port}) ->
 handle_cast({accepted, _Pid}, State = #acceptor_state{}) ->
 	{noreply, accept(State)}.
 
-accept_loop({Server, Socket, {Mod, Func}}) ->
+accept_loop({Server, Socket, {Mod, Func, ServerPid}}) ->
 	io:format("Waiting for connections...~n"),
 	{ok, SslSocket} = ssl:transport_accept(Socket),
 		gen_server:cast(Server, {accepted, self()}),
 		ssl:ssl_accept(SslSocket),
-		Mod:Func(SslSocket).
+		Mod:Func(ServerPid, SslSocket).
 
 accept(State = #acceptor_state{socket = Socket, loop = Loop}) ->
 	proc_lib:spawn(?MODULE, accept_loop, [{self(), Socket, Loop}]),
