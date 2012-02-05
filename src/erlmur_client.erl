@@ -55,6 +55,31 @@ init(#client_state{socket = Socket, server_pid = ServerPid} = State) ->
 handle_call(_Message, _From, State) ->
 	{reply, error, State}.
 
+%% ===================================================================
+%% Server calls
+%% ===================================================================
+
+handle_cast({send_channelstate, ChannelState}, State) ->
+	io:format("channelstate cast~n", []),
+	ChannelStatePb = mumble_pb:encode_channelstate(ChannelState),
+	send_message(State, ?MSG_CHANNELSTATE, ChannelStatePb),
+	{noreply, State};
+
+handle_cast({send_userstate, UserState}, State) ->
+	UserStatePb = mumble_pb:encode_userstate(UserState),
+	send_message(State, ?MSG_USERSTATE, UserStatePb),
+	{noreply, State};
+
+handle_cast({send_serversync, ServerSync}, State) ->
+	ServerSyncPb = mumble_pb:encode_serversync(ServerSync),
+	send_message(State, ?MSG_SERVERSYNC, ServerSyncPb),
+	{noreply, State};
+
+handle_cast({send_userremove, UserRemove}, State) ->
+	UserRemovePb = mumble_pb:encode_userremove(UserRemove),
+	send_message(State, ?MSG_USERREMOVE, UserRemovePb),
+	{noreply, State};
+
 handle_cast(_Message, State) -> {noreply, State}.
 
 %% ===================================================================
@@ -110,12 +135,7 @@ handle_protobuf_message(_State, ?MSG_VERSION, Message) ->
 handle_protobuf_message(State,?MSG_AUTHENTICATE, Message) ->
 	Authenticate = mumble_pb:decode_authenticate(Message),
 	io:format("Authenticate: ~p~n", [Authenticate]),
-	ChannelState = mumble_pb:encode_channelstate(#channelstate{ channel_id = 0, name = "Root" }),
-	send_message(State, ?MSG_CHANNELSTATE, ChannelState),
-	UserState = mumble_pb:encode_userstate(#userstate{ session = State#client_state.session, name = Authenticate#authenticate.username }),
-	send_message(State, ?MSG_USERSTATE, UserState),
-	ServerSync = mumble_pb:encode_serversync(#serversync{ session = State#client_state.session, max_bandwidth = 240000 }),
-	send_message(State, ?MSG_SERVERSYNC, ServerSync);
+	gen_server:cast(State#client_state.server_pid, {authenticate, self(), {Authenticate#authenticate.username, Authenticate#authenticate.password}});
 
 handle_protobuf_message(State, ?MSG_PING, Message) ->
 	_Ping = mumble_pb:decode_ping(Message),
