@@ -37,7 +37,8 @@
 -record(client_state, {
 	socket :: tuple(),
 	server_pid :: pid(),
-	message_buffer = [] :: binary() | []
+	message_buffer = [] :: binary() | [],
+	crypt_state :: {Key :: binary(), ServerNonce :: binary(), ClientNonce :: binary()}
 }).
 
 handler(ServerPid, Socket) ->
@@ -60,7 +61,6 @@ handle_call(_Message, _From, State) ->
 %% ===================================================================
 
 handle_cast({send_channelstate, ChannelState}, State) ->
-	io:format("channelstate cast~n", []),
 	ChannelStatePb = mumble_pb:encode_channelstate(ChannelState),
 	send_message(State, ?MSG_CHANNELSTATE, ChannelStatePb),
 	{noreply, State};
@@ -71,9 +71,18 @@ handle_cast({send_userstate, UserState}, State) ->
 	{noreply, State};
 
 handle_cast({send_serversync, ServerSync}, State) ->
+	{{Key, ServerNonce, ClientNonce}, NewState} = initialize_crypt_state(State),
+	CryptSetup = #cryptsetup{key = Key, server_nonce = ServerNonce, client_nonce = ClientNonce},
+	CryptSetupPb = mumble_pb:encode_cryptsetup(CryptSetup),
+	send_message(NewState, ?MSG_CRYPTSETUP, CryptSetupPb),
+
+	CodecVersion = #codecversion{alpha = -2147483637, beta = 0, prefer_alpha = true, opus = false},
+	CodecVersionPb = mumble_pb:encode_codecversion(CodecVersion),
+	send_message(NewState, ?MSG_CODECVERSION, CodecVersionPb),
+
 	ServerSyncPb = mumble_pb:encode_serversync(ServerSync),
-	send_message(State, ?MSG_SERVERSYNC, ServerSyncPb),
-	{noreply, State};
+	send_message(NewState, ?MSG_SERVERSYNC, ServerSyncPb),
+	{noreply, NewState};
 
 handle_cast({send_userremove, UserRemove}, State) ->
 	UserRemovePb = mumble_pb:encode_userremove(UserRemove),
@@ -132,6 +141,9 @@ handle_protobuf_message(_State, ?MSG_VERSION, Message) ->
 	Version = mumble_pb:decode_version(Message),
 	io:format("Version: ~p~n", [Version]);
 
+handle_protobuf_message(State, ?MSG_UDPTUNNEL, Message) ->
+	io:format("UDPTunnel: ~p~n", [Message]);
+
 handle_protobuf_message(State,?MSG_AUTHENTICATE, Message) ->
 	Authenticate = mumble_pb:decode_authenticate(Message),
 	io:format("Authenticate: ~p~n", [Authenticate]),
@@ -147,3 +159,12 @@ handle_protobuf_message(_State, ?MSG_PERMISSIONQUERY, _Message) ->
 
 handle_protobuf_message(_State, Type, _Message) ->
 	io:format("Unhandled message type ~w~n", [Type]).
+
+%% ===================================================================
+%% Utility functions
+%% ===================================================================
+
+initialize_crypt_state(State) ->
+	CryptState = {crypto:rand_bytes(16), crypto:rand_bytes(16), crypto:rand_bytes(16)},
+	NewState = State#client_state{crypt_state = CryptState},
+	{CryptState, NewState}.

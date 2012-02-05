@@ -19,6 +19,7 @@ start(Name, Port, Loop) ->
 	gen_server:start_link({local, Name}, ?MODULE, State, []).
 
 init(#acceptor_state{port = Port} = State) ->
+	process_flag(trap_exit, true),
 	case ssl:listen(Port, ?SSL_OPTIONS) of
 		{ok, Socket} ->
 			NewState = State#acceptor_state{socket = Socket},
