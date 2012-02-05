@@ -3,15 +3,14 @@
 -behaviour(gen_server).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
--export([accept_loop/1]).
 -export([start/3]).
 
 -define(SSL_OPTIONS, [binary, {nodelay, true}, {active, false}, {reuseaddr, true}, {certfile, "server.pem"}, {versions, [tlsv1]}]).
 
 -record(acceptor_state, {
-	port,
-	loop,
-	socket = null}
+	port :: 1..65535,
+	loop :: tuple(),
+	socket :: tuple()}
 ).
 
 start(Name, Port, Loop) ->
@@ -19,7 +18,7 @@ start(Name, Port, Loop) ->
 	State = #acceptor_state{port = Port, loop = Loop},
 	gen_server:start_link({local, Name}, ?MODULE, State, []).
 
-init(State = #acceptor_state{port = Port}) ->
+init(#acceptor_state{port = Port} = State) ->
 	case ssl:listen(Port, ?SSL_OPTIONS) of
 		{ok, Socket} ->
 			NewState = State#acceptor_state{socket = Socket},
@@ -31,15 +30,11 @@ init(State = #acceptor_state{port = Port}) ->
 handle_cast({accepted, _Pid}, State = #acceptor_state{}) ->
 	{noreply, accept(State)}.
 
-accept_loop({Server, Socket, {Mod, Func, ServerPid}}) ->
+accept(#acceptor_state{socket = Socket, loop = {Mod, Func, ServerPid}} = State) ->
 	io:format("Waiting for connections...~n"),
 	{ok, SslSocket} = ssl:transport_accept(Socket),
-		gen_server:cast(Server, {accepted, self()}),
-		ssl:ssl_accept(SslSocket),
-		Mod:Func(ServerPid, SslSocket).
-
-accept(State = #acceptor_state{socket = Socket, loop = Loop}) ->
-	proc_lib:spawn(?MODULE, accept_loop, [{self(), Socket, Loop}]),
+	gen_server:cast(self(), {accepted, self()}),
+	Mod:Func(ServerPid, SslSocket),
 	State.
 
 handle_call(_Msg, _Caller, State) -> {noreply, State}.

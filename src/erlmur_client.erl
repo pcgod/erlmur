@@ -1,8 +1,11 @@
 -module(erlmur_client).
+-behaviour(gen_server).
 
 -include("mumble_pb.hrl").
 
 -export([handler/2]).
+
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(MSG_VERSION, 0).
 -define(MSG_UDPTUNNEL, 1).
@@ -31,27 +34,54 @@
 -define(MSG_SERVERCONFIG, 24).
 -define(MSG_SUGGESTCONFIG, 25).
 
--record(client_state, {socket, session, server_pid, authenticated = false}).
+-record(client_state, {
+	socket :: tuple(),
+	server_pid :: pid(),
+	message_buffer = [] :: binary() | []
+}).
 
 handler(ServerPid, Socket) ->
-	{session, SessionId} = gen_server:call(ServerPid, {client_connected}),
-	State = #client_state{socket = Socket, session = SessionId, server_pid = ServerPid},
-	get_request(State, []).
+	State = #client_state{socket = Socket, server_pid = ServerPid},
+	gen_server:start_link(?MODULE, State, []).
 
-get_request(State, BinaryList) ->
-	case ssl:recv(State#client_state.socket, 0, 30000) of
-	{ok, Binary} ->
-		LeftOver = handle_message(State, iolist_to_binary([BinaryList | Binary])),
-		get_request(State, LeftOver);
-	{error, closed} ->
-		io:format("Connection closed ~w~n", [State#client_state.session]),
-		gen_server:cast(State#client_state.server_pid, {client_disconnected, self()}),
-		{stop, normal, State};
-	{error, timeout} ->
-		io:format("Connection timeout ~w~n", [State#client_state.session]),
-		gen_server:cast(State#client_state.server_pid, {client_disconnected, self()}),
-		{stop, normal, State}
-	end.
+init(#client_state{socket = Socket, server_pid = ServerPid} = State) ->
+	io:format("Client on ~w~n", [self()]),
+	ssl:controlling_process(Socket, self()),
+	ssl:ssl_accept(Socket),
+	{session, _SessionId} = gen_server:call(ServerPid, {client_connected}),
+	ssl:setopts(Socket, [{active, once}]),
+	{ok, State}.
+
+handle_call(_Message, _From, State) ->
+	{reply, error, State}.
+
+handle_cast(_Message, State) -> {noreply, State}.
+
+%% ===================================================================
+%% SSL receiving
+%% ===================================================================
+
+handle_info({ssl, _S, Binary}, #client_state{message_buffer = MsgBuffer} = State) ->
+	NewState = State#client_state{message_buffer = handle_message(State, iolist_to_binary([MsgBuffer | Binary]))},
+	ssl:setopts(State#client_state.socket, [{active, once}]),
+	{noreply, NewState};
+
+handle_info({ssl_closed, _S}, State) ->
+	gen_server:cast(State#client_state.server_pid, {client_disconnected, self()}),
+	{stop, normal, State};
+
+handle_info({ssl_error, _S, Reason}, State) ->
+	io:format("~w Connection error: ~w~n", [self(), Reason]),
+	gen_server:cast(State#client_state.server_pid, {client_disconnected, self()}),
+	{stop, normal, State};
+
+handle_info(_Message, State) -> {noreply, State}.
+terminate(_Reason, _State) -> ok.
+code_change(_OldVersion, State, _Extra) -> {ok, State}.
+
+%% ===================================================================
+%% Message handling
+%% ===================================================================
 
 handle_message(State, << Type:16/unsigned-big-integer, Size:32/unsigned-big-integer, Message:Size/binary, Rest/binary >>) ->
 	io:format("Type: ~w Size: ~w~n", [Type, Size]),
