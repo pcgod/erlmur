@@ -34,7 +34,7 @@
 -record(client_state, {socket, session, server_pid, authenticated = false}).
 
 handler(ServerPid, Socket) ->
-	{session, SessionId} = gen_server:call(ServerPid, {allocate_session}),
+	{session, SessionId} = gen_server:call(ServerPid, {client_connected}),
 	State = #client_state{socket = Socket, session = SessionId, server_pid = ServerPid},
 	get_request(State, []).
 
@@ -45,11 +45,11 @@ get_request(State, BinaryList) ->
 		get_request(State, LeftOver);
 	{error, closed} ->
 		io:format("Connection closed ~w~n", [State#client_state.session]),
-		gen_server:cast(State#client_state.server_pid, {deallocate_session, self()}),
+		gen_server:cast(State#client_state.server_pid, {client_disconnected, self()}),
 		{stop, normal, State};
 	{error, timeout} ->
 		io:format("Connection timeout ~w~n", [State#client_state.session]),
-		gen_server:cast(State#client_state.server_pid, {deallocate_session, self()}),
+		gen_server:cast(State#client_state.server_pid, {client_disconnected, self()}),
 		{stop, normal, State}
 	end.
 
